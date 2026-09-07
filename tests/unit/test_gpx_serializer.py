@@ -10,7 +10,12 @@ from pathlib import Path
 
 from mapillary_tools.geo import Point
 from mapillary_tools.serializer.gpx import GPXSerializer
-from mapillary_tools.telemetry import CAMMGPSPoint, GPSFix, GPSPoint
+from mapillary_tools.telemetry import (
+    CAMMGPSPoint,
+    gps_epoch_to_unix,
+    GPSFix,
+    GPSPoint,
+)
 from mapillary_tools.types import ErrorMetadata, FileType, ImageMetadata, VideoMetadata
 
 
@@ -151,7 +156,7 @@ class TestGPXSerializerAsGPXPoint:
         gpx_pt = GPXSerializer.as_gpx_point(img)
         assert gpx_pt.name == "photo.jpg"
 
-    def test_camm_gps_point_uses_gps_epoch_time(self):
+    def test_camm_gps_point_uses_gps_timestamp(self):
         p = CAMMGPSPoint(
             time=5.0,
             lat=48.0,
@@ -168,9 +173,10 @@ class TestGPXSerializerAsGPXPoint:
             speed_accuracy=0.5,
         )
         gpx_pt = GPXSerializer.as_gpx_point(p)
-        # time should be based on time_gps_epoch, not the video time (5.0)
+        # time should be based on time_gps_epoch, not the video time (5.0),
+        # and converted from GPS time to UTC
         assert gpx_pt.time is not None
-        assert gpx_pt.time.timestamp() == 1700000000.0
+        assert gpx_pt.time.timestamp() == gps_epoch_to_unix(1700000000.0)
 
     def test_gps_point_with_epoch_time(self):
         p = GPSPoint(

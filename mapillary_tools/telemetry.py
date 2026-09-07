@@ -6,10 +6,81 @@
 # pyre-ignore-all-errors[16]
 from __future__ import annotations
 
+import bisect
+import calendar
 import dataclasses
 from enum import Enum, unique
 
 from .geo import Point
+
+
+# Seconds between the Unix epoch (1970-01-01) and the GPS epoch (1980-01-06).
+GPS_EPOCH_UNIX_OFFSET = 315964800
+
+# UTC dates on which a leap second took effect since the GPS epoch. GPS time is
+# a continuous scale that does not count leap seconds, so converting it to UTC
+# requires subtracting however many have accumulated. There has been no leap
+# second since 2017-01-01 (GPS - UTC = 18s); append here if one is announced.
+_LEAP_SECOND_UTC_DATES: tuple[tuple[int, int, int], ...] = (
+    (1981, 7, 1),
+    (1982, 7, 1),
+    (1983, 7, 1),
+    (1985, 7, 1),
+    (1988, 1, 1),
+    (1990, 1, 1),
+    (1991, 1, 1),
+    (1992, 7, 1),
+    (1993, 7, 1),
+    (1994, 7, 1),
+    (1996, 1, 1),
+    (1997, 7, 1),
+    (1999, 1, 1),
+    (2006, 1, 1),
+    (2009, 1, 1),
+    (2012, 7, 1),
+    (2015, 7, 1),
+    (2017, 1, 1),
+)
+
+_LEAP_SECOND_UNIX_TIMES: tuple[int, ...] = tuple(
+    calendar.timegm((year, month, day, 0, 0, 0))
+    for year, month, day in _LEAP_SECOND_UTC_DATES
+)
+
+
+def _gps_utc_offset_at(unix_time: float) -> int:
+    """
+    Number of leap seconds GPS time is ahead of UTC at the given Unix time.
+
+    >>> _gps_utc_offset_at(0)  # before the GPS epoch
+    0
+    >>> _gps_utc_offset_at(1786523187)  # 2026
+    18
+    """
+    return bisect.bisect_right(_LEAP_SECOND_UNIX_TIMES, unix_time)
+
+
+def gps_epoch_to_unix(gps_epoch_time: float) -> float:
+    """
+    Convert seconds since the GPS epoch (GPS time) to Unix time (UTC).
+
+    >>> gps_epoch_to_unix(1470558405.9798455)
+    1786523187.9798455
+    """
+    # The leap-second lookup is done on the uncorrected value. That is only
+    # ambiguous for instants within ~18s of a leap-second boundary.
+    approx_unix_time = gps_epoch_time + GPS_EPOCH_UNIX_OFFSET
+    return approx_unix_time - _gps_utc_offset_at(approx_unix_time)
+
+
+def unix_to_gps_epoch(unix_time: float) -> float:
+    """
+    Convert Unix time (UTC) to seconds since the GPS epoch (GPS time).
+
+    >>> unix_to_gps_epoch(1786523187.9798455)
+    1470558405.9798455
+    """
+    return unix_time - GPS_EPOCH_UNIX_OFFSET + _gps_utc_offset_at(unix_time)
 
 
 @unique
@@ -33,16 +104,24 @@ class TimestampedMeasurement:
 
 @dataclasses.dataclass
 class GPSPoint(TimestampedMeasurement, Point):
+    # Unix time (UTC), NOT seconds since the GPS epoch
     epoch_time: float | None
     fix: GPSFix | None
     precision: float | None
     ground_speed: float | None
 
-    def get_gps_epoch_time(self) -> float | None:
-        """Return the GPS epoch time if valid, otherwise None."""
+    def get_unix_time(self) -> float | None:
+        """Return the Unix time if valid, otherwise None."""
         if self.epoch_time is not None and self.epoch_time > 0:
             return self.epoch_time
         return None
+
+    def get_gps_epoch_time(self) -> float | None:
+        """Return the GPS epoch time if valid, otherwise None."""
+        unix_time = self.get_unix_time()
+        if unix_time is None:
+            return None
+        return unix_to_gps_epoch(unix_time)
 
     def interpolate_with(self, other: Point, t: float) -> Point:
         """Create a new interpolated GPSPoint using this and other point at time t."""
@@ -92,6 +171,8 @@ class GPSPoint(TimestampedMeasurement, Point):
 
 @dataclasses.dataclass
 class CAMMGPSPoint(TimestampedMeasurement, Point):
+    # Seconds since the GPS epoch (GPS time), as defined by the CAMM spec.
+    # NOT Unix time -- use get_unix_time() to get a wall clock timestamp.
     time_gps_epoch: float
     gps_fix_type: int
     horizontal_accuracy: float
@@ -106,6 +187,13 @@ class CAMMGPSPoint(TimestampedMeasurement, Point):
         if self.time_gps_epoch > 0:
             return self.time_gps_epoch
         return None
+
+    def get_unix_time(self) -> float | None:
+        """Return the Unix time if valid, otherwise None."""
+        gps_epoch_time = self.get_gps_epoch_time()
+        if gps_epoch_time is None:
+            return None
+        return gps_epoch_to_unix(gps_epoch_time)
 
     def interpolate_with(self, other: Point, t: float) -> Point:
         """Create a new interpolated CAMMGPSPoint using this and other point at time t."""

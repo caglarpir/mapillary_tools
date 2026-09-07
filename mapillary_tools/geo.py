@@ -39,7 +39,17 @@ class Point:
 
     def get_gps_epoch_time(self) -> float | None:
         """
-        Return the GPS epoch time for this point.
+        Return the time of this point in seconds since the GPS epoch
+        (1980-01-06), i.e. GPS time.
+        Base Point class returns None, subclasses can override.
+        """
+        return None
+
+    def get_unix_time(self) -> float | None:
+        """
+        Return the time of this point in Unix time (seconds since 1970-01-01,
+        UTC). This is the canonical wall clock accessor -- prefer it over
+        get_gps_epoch_time() everywhere except when serializing CAMM.
         Base Point class returns None, subclasses can override.
         """
         return None
@@ -100,7 +110,7 @@ def gps_distance(latlon_1: tuple[float, float], latlon_2: tuple[float, float]) -
 def avg_speed(sequence: T.Sequence[PointLike]) -> float:
     """
     Calculate average speed over a sequence of points.
-    Uses GPS epoch time when available (via get_gps_epoch_time()),
+    Uses Unix time when available (via get_unix_time()),
     otherwise falls back to the time field.
     Returns 0.0 for empty or single-element sequences.
     Returns NaN if time difference is zero (undefined speed).
@@ -116,14 +126,14 @@ def avg_speed(sequence: T.Sequence[PointLike]) -> float:
     first = sequence[0]
     last = sequence[-1]
 
-    # Try to use GPS epoch time if available (via polymorphic method)
-    first_gps_time = first.get_gps_epoch_time()
-    last_gps_time = last.get_gps_epoch_time()
+    # Try to use Unix time if available (via polymorphic method)
+    first_unix_time = first.get_unix_time()
+    last_unix_time = last.get_unix_time()
 
-    if first_gps_time is not None and last_gps_time is not None:
-        time_diff = last_gps_time - first_gps_time
+    if first_unix_time is not None and last_unix_time is not None:
+        time_diff = last_unix_time - first_unix_time
     else:
-        # Fall back to time field if GPS epoch time not available
+        # Fall back to time field if Unix time not available
         time_diff = last.time - first.time
 
     if time_diff == 0.0:

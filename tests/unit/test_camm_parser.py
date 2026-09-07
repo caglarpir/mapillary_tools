@@ -525,7 +525,11 @@ def test_prepare_camm_info_gpspoint_with_epoch_time():
         assert converted.lon == original.lon
         assert converted.alt == original.alt
         assert converted.time == original.time
-        assert converted.time_gps_epoch == original.epoch_time
+        # epoch_time is Unix time, time_gps_epoch is GPS time
+        assert converted.time_gps_epoch == telemetry.unix_to_gps_epoch(
+            original.epoch_time
+        )
+        assert converted.get_unix_time() == original.epoch_time
 
     # Verify fix type was correctly converted from GPSFix enum
     assert camm_info.gps[0].gps_fix_type == 3  # FIX_3D.value
@@ -672,8 +676,10 @@ def test_prepare_camm_info_mixed_point_types():
     # 2 points in gps (CAMMGPSPoint + converted GPSPoint)
     assert camm_info.gps is not None
     assert len(camm_info.gps) == 2
+    # gps[0] was already a CAMMGPSPoint, so its GPS time is passed through
     assert camm_info.gps[0].time_gps_epoch == 1706000000.0
-    assert camm_info.gps[1].time_gps_epoch == 1706000001.0
+    # gps[1] was converted from a GPSPoint, whose epoch_time is Unix time
+    assert camm_info.gps[1].time_gps_epoch == telemetry.unix_to_gps_epoch(1706000001.0)
 
     # 2 points in mini_gps (GPSPoint without epoch + geo.Point)
     assert camm_info.mini_gps is not None
@@ -718,6 +724,79 @@ def test_prepare_camm_info_gpspoint_roundtrip():
     for original, decoded in zip(points, x.points):
         assert isinstance(decoded, telemetry.CAMMGPSPoint)
         decoded_camm = T.cast(telemetry.CAMMGPSPoint, decoded)
-        assert abs(original.epoch_time - decoded_camm.time_gps_epoch) < 10e-6
+        # The wall clock timestamp survives the Unix -> GPS -> Unix round trip
+        assert abs(original.epoch_time - decoded_camm.get_unix_time()) < 10e-6
         assert abs(original.lat - decoded_camm.lat) < 10e-6
         assert abs(original.lon - decoded_camm.lon) < 10e-6
+
+
+def _extract_camm_info_from_points(
+    points: T.Sequence[geo.Point],
+) -> camm_parser.CAMMInfo:
+    """Build an in-memory CAMM mp4 out of points and parse it back."""
+    movie_timescale = 1_000_000
+
+    mvhd: cparser.BoxDict = {
+        "type": b"mvhd",
+        "data": {
+            "creation_time": 1,
+            "modification_time": 2,
+            "timescale": movie_timescale,
+            "duration": int(36000 * movie_timescale),
+        },
+    }
+    empty_mp4: T.List[cparser.BoxDict] = [
+        {"type": b"ftyp", "data": b"test"},
+        {"type": b"moov", "data": [mvhd]},
+    ]
+    src = cparser.MP4WithoutSTBLBuilderConstruct.build_boxlist(empty_mp4)
+
+    metadata = types.VideoMetadata(
+        Path(""), filetype=types.FileType.CAMM, points=list(points)
+    )
+    input_camm_info = uploader.VideoUploader.prepare_camm_info(metadata)
+    target_fp = simple_mp4_builder.transform_mp4(
+        io.BytesIO(src), camm_builder.camm_sample_generator2(input_camm_info)
+    )
+
+    camm_info = camm_parser.extract_camm_info(T.cast(T.BinaryIO, target_fp))
+    assert camm_info is not None
+    return camm_info
+
+
+def test_extract_camm_info_routes_gps_points_to_gps():
+    """CAMMGPSPoint is a subclass of geo.Point, so type 6 must be tested first
+    or every GPS point silently lands in mini_gps (type 5)."""
+    camm_info = _extract_camm_info_from_points(
+        [
+            telemetry.CAMMGPSPoint(
+                time=0.0,
+                lat=37.7749,
+                lon=-122.4194,
+                alt=10.0,
+                angle=None,
+                time_gps_epoch=1470558405.0,
+                gps_fix_type=3,
+                horizontal_accuracy=0.0,
+                vertical_accuracy=0.0,
+                velocity_east=0.0,
+                velocity_north=0.0,
+                velocity_up=0.0,
+                speed_accuracy=0.0,
+            )
+        ]
+    )
+    assert camm_info.gps is not None
+    assert len(camm_info.gps) == 1
+    assert isinstance(camm_info.gps[0], telemetry.CAMMGPSPoint)
+    assert not camm_info.mini_gps
+
+
+def test_extract_camm_info_routes_plain_points_to_mini_gps():
+    camm_info = _extract_camm_info_from_points(
+        [geo.Point(time=0.0, lat=37.7749, lon=-122.4194, alt=10.0, angle=None)]
+    )
+    assert not camm_info.gps
+    assert camm_info.mini_gps is not None
+    assert len(camm_info.mini_gps) == 1
+    assert type(camm_info.mini_gps[0]) is geo.Point

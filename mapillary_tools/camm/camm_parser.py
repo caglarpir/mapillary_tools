@@ -116,10 +116,12 @@ def extract_camm_info(fp: T.BinaryIO, telemetry_only: bool = False) -> CAMMInfo 
                 gps: list[telemetry.CAMMGPSPoint] = []
 
                 for measurement in measurements:
-                    if isinstance(measurement, geo.Point):
-                        mini_gps.append(measurement)
-                    elif isinstance(measurement, telemetry.CAMMGPSPoint):
+                    # NOTE: CAMMGPSPoint is a subclass of geo.Point, so it has
+                    # to be tested first or every GPS point ends up in mini_gps
+                    if isinstance(measurement, telemetry.CAMMGPSPoint):
                         gps.append(measurement)
+                    elif isinstance(measurement, geo.Point):
+                        mini_gps.append(measurement)
 
                 return CAMMInfo(mini_gps=mini_gps, gps=gps, make=make, model=model)
 

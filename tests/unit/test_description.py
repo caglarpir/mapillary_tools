@@ -167,7 +167,8 @@ def test_encode_camm_gps_point():
     encoded = PointEncoder.encode(p)
     assert len(encoded) == 6
     assert encoded[0] == 2000
-    assert encoded[5] == 1700000001.0
+    # The description carries Unix time, the point carries GPS time
+    assert encoded[5] == telemetry.gps_epoch_to_unix(1700000001.0)
 
 
 def test_decode_camm_gps_point():
@@ -179,7 +180,9 @@ def test_decode_camm_gps_point():
     assert p.lon == -122.4194
     assert p.alt == 15.0
     assert p.angle == 180.0
-    assert p.time_gps_epoch == 1700000001.0
+    # entry[5] is Unix time, CAMMGPSPoint.time_gps_epoch is GPS time
+    assert p.time_gps_epoch == telemetry.unix_to_gps_epoch(1700000001.0)
+    assert p.get_unix_time() == 1700000001.0
     assert p.gps_fix_type == 3  # alt is not None
 
 
