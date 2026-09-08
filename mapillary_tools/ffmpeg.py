@@ -20,6 +20,21 @@ from pathlib import Path
 LOG = logging.getLogger(__name__)
 _MAX_STDERR_LENGTH = 2048
 
+# ffmpeg keeps deprecated CLI options around for a few releases and then drops
+# them, so the spelling we can use depends on the binary we find at runtime.
+
+# "-/opt", which reads an option value from a file, was added in ffmpeg 7.1.
+# The same release deprecated -filter_script, and ffmpeg 9.0 removed it.
+_READ_OPTION_FROM_FILE_MIN_VERSION = (7, 1)
+
+# -fps_mode was added in ffmpeg 5.1, deprecating -vsync.
+_FPS_MODE_MIN_VERSION = (5, 1)
+
+# Matches "ffmpeg version 7.1.5", "ffmpeg version n7.1.5" and
+# "ffmpeg version 6.1.1-3ubuntu5". Git and nightly builds report things like
+# "ffmpeg version N-121246-gd52c8dbc9d", which deliberately do not match.
+_FFMPEG_VERSION_RE = re.compile(r"^ffmpeg version n?(\d+)\.(\d+)")
+
 
 class StreamTag(T.TypedDict):
     creation_time: str
@@ -98,6 +113,56 @@ class FFMPEG:
         self.ffmpeg_path = ffmpeg_path
         self.ffprobe_path = ffprobe_path
         self.stderr = stderr
+        self._version: tuple[int, int] | None = None
+        self._version_probed = False
+
+    def get_version(self) -> tuple[int, int] | None:
+        """
+        Return the (major, minor) version of the ffmpeg binary, or None if it
+        can not be determined (git and nightly builds do not report one).
+
+        The result is cached, so ffmpeg is only asked once per instance.
+        """
+        if not self._version_probed:
+            self._version_probed = True
+            self._version = self._probe_version()
+        return self._version
+
+    def _probe_version(self) -> tuple[int, int] | None:
+        try:
+            completed = subprocess.run(
+                [self.ffmpeg_path, "-version"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            raise FFmpegNotFoundError(
+                f'The ffmpeg command "{self.ffmpeg_path}" not found'
+            )
+        except subprocess.CalledProcessError:
+            LOG.warning("Failed to read the ffmpeg version from %s", self.ffmpeg_path)
+            return None
+
+        first_line = completed.stdout.decode("utf-8", errors="replace").splitlines()
+        matched = _FFMPEG_VERSION_RE.match(first_line[0]) if first_line else None
+        if matched is None:
+            LOG.debug("Unable to parse the ffmpeg version from %s", self.ffmpeg_path)
+            return None
+
+        return (int(matched.group(1)), int(matched.group(2)))
+
+    def _supports(self, min_version: tuple[int, int]) -> bool:
+        """
+        Whether the ffmpeg binary is new enough for a given option spelling.
+
+        Builds that do not report a version are assumed to be new, because in
+        practice they are git or nightly builds tracking master.
+        """
+        version = self.get_version()
+        if version is None:
+            return True
+        return version >= min_version
 
     def probe_format_and_streams(self, video_path: Path) -> ProbeOutput:
         """
@@ -276,9 +341,9 @@ class FFMPEG:
                     *stream_selector,
                     # Filter videos
                     *[
-                        *["-filter_script:v", select_file.name],
+                        *self._read_filter_from_file_args(select_file.name),
                         # Each frame is passed with its timestamp from the demuxer to the muxer
-                        *["-vsync", "0"],
+                        *self._passthrough_fps_args(),
                         # Set the number of video frames to output (this is an optimization to let ffmpeg stop early)
                         *["-frames:v", str(len(frame_indices))],
                     ],
@@ -391,6 +456,27 @@ class FFMPEG:
             if result is not None:
                 stream_specifier, frame_idx = result
                 yield (stream_specifier, frame_idx, sample_path)
+
+    def _read_filter_from_file_args(self, filter_path: str) -> list[str]:
+        """
+        Arguments that apply a video filter graph read from a file.
+
+        ffmpeg 9.0 removed -filter_script, so newer binaries get the -/opt
+        syntax that replaced it in 7.1.
+        """
+        if self._supports(_READ_OPTION_FROM_FILE_MIN_VERSION):
+            return ["-/filter:v", filter_path]
+        return ["-filter_script:v", filter_path]
+
+    def _passthrough_fps_args(self) -> list[str]:
+        """
+        Arguments that pass every frame through with its demuxer timestamp.
+
+        -vsync has been deprecated since ffmpeg 5.1 in favour of -fps_mode.
+        """
+        if self._supports(_FPS_MODE_MIN_VERSION):
+            return ["-fps_mode", "passthrough"]
+        return ["-vsync", "0"]
 
     def run_ffmpeg_non_interactive(self, cmd: list[str]) -> None:
         """
