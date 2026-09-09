@@ -134,7 +134,7 @@ def test_build_and_parse_camm_gps_points():
             lon=0.2,
             alt=None,
             angle=None,
-            time_gps_epoch=1.1,
+            epoch_time=1.1,
             gps_fix_type=1,
             horizontal_accuracy=3.3,
             vertical_accuracy=4.4,
@@ -149,7 +149,7 @@ def test_build_and_parse_camm_gps_points():
             lon=0.2,
             alt=None,
             angle=None,
-            time_gps_epoch=1.2,
+            epoch_time=1.2,
             gps_fix_type=1,
             horizontal_accuracy=3.3,
             vertical_accuracy=4.4,
@@ -164,7 +164,7 @@ def test_build_and_parse_camm_gps_points():
             lon=0.21,
             alt=None,
             angle=None,
-            time_gps_epoch=1.3,
+            epoch_time=1.3,
             gps_fix_type=1,
             horizontal_accuracy=3.3,
             vertical_accuracy=4.4,
@@ -188,7 +188,7 @@ def test_build_and_parse_camm_gps_points():
                 lon=0.2,
                 alt=-1,
                 angle=None,
-                time_gps_epoch=1.2,
+                epoch_time=1.2,
                 gps_fix_type=1,
                 horizontal_accuracy=3.3,
                 vertical_accuracy=4.4,
@@ -203,7 +203,7 @@ def test_build_and_parse_camm_gps_points():
                 lon=0.21,
                 alt=-1,
                 angle=None,
-                time_gps_epoch=1.3,
+                epoch_time=1.3,
                 gps_fix_type=1,
                 horizontal_accuracy=3.3,
                 vertical_accuracy=4.4,
@@ -423,7 +423,7 @@ def test_build_and_parse_gpx_sourced_camm_gps_points():
             lon=-122.4194,
             alt=10.0,
             angle=None,
-            time_gps_epoch=1706000000.0,
+            epoch_time=1706000000.0,
             gps_fix_type=3,
             horizontal_accuracy=0.0,
             vertical_accuracy=0.0,
@@ -438,7 +438,7 @@ def test_build_and_parse_gpx_sourced_camm_gps_points():
             lon=-122.4195,
             alt=11.0,
             angle=None,
-            time_gps_epoch=1706000001.0,
+            epoch_time=1706000001.0,
             gps_fix_type=3,
             horizontal_accuracy=0.0,
             vertical_accuracy=0.0,
@@ -453,7 +453,7 @@ def test_build_and_parse_gpx_sourced_camm_gps_points():
             lon=-122.4196,
             alt=12.0,
             angle=None,
-            time_gps_epoch=1706000002.0,
+            epoch_time=1706000002.0,
             gps_fix_type=3,
             horizontal_accuracy=0.0,
             vertical_accuracy=0.0,
@@ -469,12 +469,12 @@ def test_build_and_parse_gpx_sourced_camm_gps_points():
         points=points,
     )
     x = encode_decode_empty_camm_mp4(metadata)
-    # Verify points round-trip with time_gps_epoch preserved
+    # Verify points round-trip with epoch_time preserved
     assert len(x.points) == 3
     for original, decoded in zip(points, x.points):
         assert isinstance(decoded, telemetry.CAMMGPSPoint)
         decoded_camm = T.cast(telemetry.CAMMGPSPoint, decoded)
-        assert abs(original.time_gps_epoch - decoded_camm.time_gps_epoch) < 10e-6
+        assert abs(original.epoch_time - decoded_camm.epoch_time) < 10e-6
         assert abs(original.time - decoded_camm.time) < 10e-6
         assert abs(original.lat - decoded_camm.lat) < 10e-6
         assert abs(original.lon - decoded_camm.lon) < 10e-6
@@ -525,10 +525,8 @@ def test_prepare_camm_info_gpspoint_with_epoch_time():
         assert converted.lon == original.lon
         assert converted.alt == original.alt
         assert converted.time == original.time
-        # epoch_time is Unix time, time_gps_epoch is GPS time
-        assert converted.time_gps_epoch == telemetry.unix_to_gps_epoch(
-            original.epoch_time
-        )
+        # Both point types carry Unix time, so the value passes through
+        assert converted.epoch_time == original.epoch_time
         assert converted.get_unix_time() == original.epoch_time
 
     # Verify fix type was correctly converted from GPSFix enum
@@ -624,7 +622,7 @@ def test_prepare_camm_info_mixed_point_types():
             lon=-122.4194,
             alt=10.0,
             angle=None,
-            time_gps_epoch=1706000000.0,
+            epoch_time=1706000000.0,
             gps_fix_type=3,
             horizontal_accuracy=1.0,
             vertical_accuracy=2.0,
@@ -676,10 +674,9 @@ def test_prepare_camm_info_mixed_point_types():
     # 2 points in gps (CAMMGPSPoint + converted GPSPoint)
     assert camm_info.gps is not None
     assert len(camm_info.gps) == 2
-    # gps[0] was already a CAMMGPSPoint, so its GPS time is passed through
-    assert camm_info.gps[0].time_gps_epoch == 1706000000.0
-    # gps[1] was converted from a GPSPoint, whose epoch_time is Unix time
-    assert camm_info.gps[1].time_gps_epoch == telemetry.unix_to_gps_epoch(1706000001.0)
+    # Both were already Unix time, so both pass through unchanged
+    assert camm_info.gps[0].epoch_time == 1706000000.0
+    assert camm_info.gps[1].epoch_time == 1706000001.0
 
     # 2 points in mini_gps (GPSPoint without epoch + geo.Point)
     assert camm_info.mini_gps is not None
@@ -775,7 +772,7 @@ def test_extract_camm_info_routes_gps_points_to_gps():
                 lon=-122.4194,
                 alt=10.0,
                 angle=None,
-                time_gps_epoch=1470558405.0,
+                epoch_time=1470558405.0,
                 gps_fix_type=3,
                 horizontal_accuracy=0.0,
                 vertical_accuracy=0.0,
@@ -800,3 +797,66 @@ def test_extract_camm_info_routes_plain_points_to_mini_gps():
     assert camm_info.mini_gps is not None
     assert len(camm_info.mini_gps) == 1
     assert type(camm_info.mini_gps[0]) is geo.Point
+
+
+def test_camm_gps_timestamps_round_trip_as_unix():
+    """process -> build CAMM -> re-read must return the input timestamps.
+
+    mapillary_tools has always written Unix time into the CAMM type 6
+    time_gps_epoch field, and released versions read it back as Unix time.
+    Writing anything else would make our output unreadable by them, so the
+    serializer must not convert.
+    """
+    unix_times = [1655503450.5, 1655503451.5]
+    points = [
+        telemetry.CAMMGPSPoint(
+            time=float(idx),
+            lat=37.7749 + idx * 1e-4,
+            lon=-122.4194,
+            alt=10.0,
+            angle=None,
+            epoch_time=unix_time,
+            gps_fix_type=3,
+            horizontal_accuracy=0.0,
+            vertical_accuracy=0.0,
+            velocity_east=0.0,
+            velocity_north=0.0,
+            velocity_up=0.0,
+            speed_accuracy=0.0,
+        )
+        for idx, unix_time in enumerate(unix_times)
+    ]
+    metadata = types.VideoMetadata(
+        Path(""), filetype=types.FileType.CAMM, points=points
+    )
+
+    decoded = encode_decode_empty_camm_mp4(metadata).points
+
+    assert [T.cast(telemetry.CAMMGPSPoint, p).epoch_time for p in decoded] == unix_times
+    assert [p.get_unix_time() for p in decoded] == unix_times
+
+
+def test_gpspoint_timestamps_round_trip_as_unix():
+    """The same, for GoPro/BlackVue/NMEA sources converted on the way out."""
+    unix_time = 1655503450.5
+    metadata = types.VideoMetadata(
+        Path(""),
+        filetype=types.FileType.GOPRO,
+        points=[
+            telemetry.GPSPoint(
+                time=0.0,
+                lat=37.7749,
+                lon=-122.4194,
+                alt=10.0,
+                angle=None,
+                epoch_time=unix_time,
+                fix=telemetry.GPSFix.FIX_3D,
+                precision=None,
+                ground_speed=None,
+            )
+        ],
+    )
+
+    decoded = encode_decode_empty_camm_mp4(metadata).points
+
+    assert T.cast(telemetry.CAMMGPSPoint, decoded[0]).epoch_time == unix_time

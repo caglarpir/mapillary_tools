@@ -64,6 +64,8 @@ def gps_epoch_to_unix(gps_epoch_time: float) -> float:
     """
     Convert seconds since the GPS epoch (GPS time) to Unix time (UTC).
 
+    Only called at the parse boundary, for producers known to record GPS time.
+
     >>> gps_epoch_to_unix(1470558405.9798455)
     1786523187.9798455
     """
@@ -71,16 +73,6 @@ def gps_epoch_to_unix(gps_epoch_time: float) -> float:
     # ambiguous for instants within ~18s of a leap-second boundary.
     approx_unix_time = gps_epoch_time + GPS_EPOCH_UNIX_OFFSET
     return approx_unix_time - _gps_utc_offset_at(approx_unix_time)
-
-
-def unix_to_gps_epoch(unix_time: float) -> float:
-    """
-    Convert Unix time (UTC) to seconds since the GPS epoch (GPS time).
-
-    >>> unix_to_gps_epoch(1786523187.9798455)
-    1470558405.9798455
-    """
-    return unix_time - GPS_EPOCH_UNIX_OFFSET + _gps_utc_offset_at(unix_time)
 
 
 @unique
@@ -115,13 +107,6 @@ class GPSPoint(TimestampedMeasurement, Point):
         if self.epoch_time is not None and self.epoch_time > 0:
             return self.epoch_time
         return None
-
-    def get_gps_epoch_time(self) -> float | None:
-        """Return the GPS epoch time if valid, otherwise None."""
-        unix_time = self.get_unix_time()
-        if unix_time is None:
-            return None
-        return unix_to_gps_epoch(unix_time)
 
     def interpolate_with(self, other: Point, t: float) -> Point:
         """Create a new interpolated GPSPoint using this and other point at time t."""
@@ -171,9 +156,15 @@ class GPSPoint(TimestampedMeasurement, Point):
 
 @dataclasses.dataclass
 class CAMMGPSPoint(TimestampedMeasurement, Point):
-    # Seconds since the GPS epoch (GPS time), as defined by the CAMM spec.
-    # NOT Unix time -- use get_unix_time() to get a wall clock timestamp.
-    time_gps_epoch: float
+    # Unix time (UTC), same meaning as GPSPoint.epoch_time.
+    #
+    # The corresponding CAMM box field is named time_gps_epoch, but what
+    # producers actually store there varies: Labpano cameras record GPS time,
+    # while Insta360 and mapillary_tools itself record Unix time. Whatever the
+    # producer wrote is normalized to Unix time once, when the CAMM track is
+    # parsed (see camm_parser.extract_camm_info), so that everything
+    # downstream can rely on a single meaning.
+    epoch_time: float
     gps_fix_type: int
     horizontal_accuracy: float
     vertical_accuracy: float
@@ -182,18 +173,11 @@ class CAMMGPSPoint(TimestampedMeasurement, Point):
     velocity_up: float
     speed_accuracy: float
 
-    def get_gps_epoch_time(self) -> float | None:
-        """Return the GPS epoch time if valid, otherwise None."""
-        if self.time_gps_epoch > 0:
-            return self.time_gps_epoch
-        return None
-
     def get_unix_time(self) -> float | None:
         """Return the Unix time if valid, otherwise None."""
-        gps_epoch_time = self.get_gps_epoch_time()
-        if gps_epoch_time is None:
-            return None
-        return gps_epoch_to_unix(gps_epoch_time)
+        if self.epoch_time > 0:
+            return self.epoch_time
+        return None
 
     def interpolate_with(self, other: Point, t: float) -> Point:
         """Create a new interpolated CAMMGPSPoint using this and other point at time t."""
@@ -203,9 +187,7 @@ class CAMMGPSPoint(TimestampedMeasurement, Point):
 
         # Interpolate all CAMM-specific fields
         weight = self._calculate_weight_for_interpolation(other, t)
-        time_gps_epoch = (
-            self.time_gps_epoch + (other.time_gps_epoch - self.time_gps_epoch) * weight
-        )
+        epoch_time = self.epoch_time + (other.epoch_time - self.epoch_time) * weight
         horizontal_accuracy = (
             self.horizontal_accuracy
             + (other.horizontal_accuracy - self.horizontal_accuracy) * weight
@@ -231,7 +213,7 @@ class CAMMGPSPoint(TimestampedMeasurement, Point):
             lon=base.lon,
             alt=base.alt,
             angle=base.angle,
-            time_gps_epoch=time_gps_epoch,
+            epoch_time=epoch_time,
             gps_fix_type=self.gps_fix_type,  # Use start point's fix type
             horizontal_accuracy=horizontal_accuracy,
             vertical_accuracy=vertical_accuracy,

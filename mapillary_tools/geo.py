@@ -37,19 +37,10 @@ class Point:
     alt: float | None
     angle: float | None
 
-    def get_gps_epoch_time(self) -> float | None:
-        """
-        Return the time of this point in seconds since the GPS epoch
-        (1980-01-06), i.e. GPS time.
-        Base Point class returns None, subclasses can override.
-        """
-        return None
-
     def get_unix_time(self) -> float | None:
         """
-        Return the time of this point in Unix time (seconds since 1970-01-01,
-        UTC). This is the canonical wall clock accessor -- prefer it over
-        get_gps_epoch_time() everywhere except when serializing CAMM.
+        Return the absolute time of this point in Unix time (seconds since
+        1970-01-01, UTC), or None if the point carries no absolute timestamp.
         Base Point class returns None, subclasses can override.
         """
         return None
