@@ -263,3 +263,98 @@ def test_probe():
         "2023-03-07 01:35:34",
         "4.933333",
     )
+
+
+def _ffmpeg_with_version(version):
+    ff = ffmpeg.FFMPEG()
+    ff._version_probed = True
+    ff._version = version
+    return ff
+
+
+def test_parse_ffmpeg_version():
+    """Distro and build suffixes must not defeat the version match."""
+    parse = ffmpeg._FFMPEG_VERSION_RE.match
+
+    for line, expected in [
+        ("ffmpeg version 9.0.1 Copyright (c) 2000-2026", (9, 0)),
+        ("ffmpeg version 8.1.2 Copyright (c) 2000-2026", (8, 1)),
+        ("ffmpeg version n7.1.5 Copyright (c) 2000-2025", (7, 1)),
+        ("ffmpeg version 7.0.2-static https://johnvansickle.com/ffmpeg/", (7, 0)),
+        ("ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023", (6, 1)),
+    ]:
+        matched = parse(line)
+        assert matched is not None, line
+        assert (int(matched.group(1)), int(matched.group(2))) == expected, line
+
+    # Git and nightly builds do not report a release version
+    assert parse("ffmpeg version N-121246-gd52c8dbc9d Copyright (c) 2000-2026") is None
+
+
+def test_ffmpeg_version_is_probed_once():
+    pytest_skip_if_not_ffmpeg_installed()
+
+    ff = ffmpeg.FFMPEG()
+    assert ff.get_version() == ff.get_version()
+    assert ff._version_probed
+
+    # An unreadable binary must not be mistaken for an old one
+    with pytest.raises(ffmpeg.FFmpegNotFoundError):
+        ffmpeg.FFMPEG(ffmpeg_path="not_exist_ffmpeg_binary").get_version()
+
+
+def test_option_spelling_by_ffmpeg_version():
+    """ffmpeg 9.0 dropped -filter_script, ffmpeg < 7.1 never had -/filter."""
+    legacy_filter = ["-filter_script:v", "/tmp/f.txt"]
+    modern_filter = ["-/filter:v", "/tmp/f.txt"]
+
+    for version, expected in [
+        ((6, 1), legacy_filter),
+        ((7, 0), legacy_filter),
+        ((7, 1), modern_filter),
+        ((9, 0), modern_filter),
+        # Unversioned git builds track master, so assume the modern spelling
+        (None, modern_filter),
+    ]:
+        ff = _ffmpeg_with_version(version)
+        assert ff._read_filter_from_file_args("/tmp/f.txt") == expected, version
+
+    for version, expected in [
+        ((5, 0), ["-vsync", "0"]),
+        ((5, 1), ["-fps_mode", "passthrough"]),
+        ((9, 0), ["-fps_mode", "passthrough"]),
+        (None, ["-fps_mode", "passthrough"]),
+    ]:
+        ff = _ffmpeg_with_version(version)
+        assert ff._passthrough_fps_args() == expected, version
+
+
+def test_ffmpeg_extract_specified_frames_legacy_options_ok(setup_data: py.path.local):
+    """The pre-7.1 spelling must still extract the same frames.
+
+    ffmpeg 7.1 through 8.x accept both spellings, so on those binaries this
+    pins the legacy branch; elsewhere it is skipped.
+    """
+    pytest_skip_if_not_ffmpeg_installed()
+
+    if not (7, 1) <= (ffmpeg.FFMPEG().get_version() or (0, 0)) < (9, 0):
+        pytest.skip("ffmpeg does not accept both the legacy and modern spellings")
+
+    video_path = Path(setup_data.join("videos/sample-5s.mp4"))
+    digests = []
+
+    for version in [(7, 0), (7, 1)]:
+        sample_dir = Path(setup_data.join(f"videos/samples_{version[0]}_{version[1]}"))
+        sample_dir.mkdir()
+
+        ff = _ffmpeg_with_version(version)
+        ff.extract_specified_frames(video_path, sample_dir, frame_indices={2, 9})
+
+        results = list(ff.sort_selected_samples(sample_dir, video_path))
+        assert len(results) == 2, version
+        digests.append(
+            [p.read_bytes() for _, paths in results for p in paths if p is not None]
+        )
+
+    # Both spellings must select the same frames byte for byte
+    assert digests[0] == digests[1]
